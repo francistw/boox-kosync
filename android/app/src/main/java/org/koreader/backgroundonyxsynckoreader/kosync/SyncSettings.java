@@ -6,10 +6,10 @@ import android.content.SharedPreferences;
 /**
  * Persistent sync configuration and status, backed by SharedPreferences.
  *
- * Only the MD5 hex of the password is ever stored — it is computed once when
- * the user types the password (same as CrossPoint does internally), so the
- * x-auth-key credential lines up byte-for-byte across both devices. The
- * plaintext password never touches disk or logs.
+ * The MD5 hex of the password is stored for standard kosync
+ * x-auth-user / x-auth-key authentication. The plaintext password is also
+ * stored in the app-private preferences so Calibre-Web-Automated's kosync
+ * bridge can be accessed with HTTP Basic authentication.
  */
 public class SyncSettings {
 
@@ -20,6 +20,7 @@ public class SyncSettings {
     private static final String KEY_SERVER_URL = "server_url";
     private static final String KEY_USERNAME = "username";
     private static final String KEY_PASSWORD_MD5 = "password_md5";
+    private static final String KEY_PASSWORD_PLAIN = "password_plain";
     private static final String KEY_MATCH_METHOD = "match_method";
     private static final String KEY_LAST_SYNC_MS = "last_sync_ms";
     private static final String KEY_LAST_ERROR = "last_error";
@@ -46,6 +47,10 @@ public class SyncSettings {
         return prefs.getString(KEY_PASSWORD_MD5, "");
     }
 
+    public String getPasswordPlain() {
+        return prefs.getString(KEY_PASSWORD_PLAIN, "");
+    }
+
     public String getMatchMethod() {
         return prefs.getString(KEY_MATCH_METHOD, MATCH_BINARY);
     }
@@ -58,10 +63,15 @@ public class SyncSettings {
         prefs.edit().putString(KEY_USERNAME, username.trim()).apply();
     }
 
-    /** Hashes and stores the password; the plaintext is discarded here. */
+    /**
+     * Stores both forms: MD5 for standard kosync and plaintext for CWA's
+     * HTTP Basic authentication. SharedPreferences is private to this app.
+     */
     public void setPassword(String plaintextPassword) {
-        prefs.edit().putString(KEY_PASSWORD_MD5,
-                KoReaderDocumentHash.md5Hex(plaintextPassword)).apply();
+        prefs.edit()
+                .putString(KEY_PASSWORD_MD5, KoReaderDocumentHash.md5Hex(plaintextPassword))
+                .putString(KEY_PASSWORD_PLAIN, plaintextPassword)
+                .apply();
     }
 
     public void setMatchMethod(String method) {

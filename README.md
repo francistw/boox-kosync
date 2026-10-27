@@ -91,19 +91,25 @@ than remote progress you actually want. Automatic sync is unaffected.
    apps by default), then launch it.
 2. Grant **All files access** when prompted — needed to read book files for
    the partial-MD5 hash.
-3. Enter the same values you use in CrossPoint's KOReader Sync menu:
+3. Enter your sync settings:
    - **Sync server URL** — e.g. `https://sync.koreader.rocks` or a self-hosted
      `http://<server-ip>:17200`. A bare host gets `http://` prepended, same as
      CrossPoint.
-   - **Username** and **password** — only the MD5 hash of the password is
-     stored (computed once at entry, identical to what CrossPoint sends as
-     `x-auth-key`), never the plaintext.
+   - For **Calibre-Web-Automated**, use the CWA kosync base URL including the
+     `/kosync` path, e.g. `https://books.example.com/kosync`.
+   - **Username** and **password** — the MD5 hash is stored for standard kosync
+     `x-auth-user`/`x-auth-key` authentication. The plaintext password is also
+     kept in this app's private preferences so CWA can receive HTTP Basic Auth.
 4. Tap **Save & Authenticate** to round-trip test against the server.
 5. **On Onyx devices, also check** Settings → Apps → this app → allow
    auto-start / background running. Onyx's own power management can kill or
    block the service after boot regardless of the manifest permissions —
    verify the persistent "Syncing reading progress" notification survives a
    reboot.
+
+If upgrading from a build that stored only the MD5 hash, enter the password
+again once and tap **Save & Authenticate** so the app can send CWA's required
+HTTP Basic credentials.
 
 ### Registering an account
 
@@ -113,11 +119,9 @@ the same credentials here.
 
 ## Known limitations
 
-- **Calibre-Web-Automated**: CWA's kosync bridge authenticates with HTTP Basic
-  using the *plaintext* password. Since this app deliberately stores only the
-  MD5 hash, it sends the standard kosync `x-auth-user`/`x-auth-key` headers
-  only. Stock kosync servers (and CrossPoint-compatible setups) work; CWA may
-  not.
+- CWA uses HTTP Basic while stock kosync uses `x-auth-user` / `x-auth-key`.
+  This fork sends both authentication forms when the plaintext password is
+  available, preserving compatibility with both server types.
 - Progress resolution is one page — see *Position resolution* above.
 - A pull landing while NeoReader has the book open in the foreground cannot
   move the open reader; the synced position takes effect on the next cold

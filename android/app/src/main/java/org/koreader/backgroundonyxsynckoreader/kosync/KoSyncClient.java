@@ -1,5 +1,6 @@
 package org.koreader.backgroundonyxsynckoreader.kosync;
 
+import android.util.Base64;
 import android.util.Log;
 
 import org.json.JSONObject;
@@ -19,8 +20,11 @@ import java.nio.charset.StandardCharsets;
  *   GET  {base}/users/auth               -> 200 ok / 401 bad credentials
  *   GET  {base}/syncs/progress/{docHash} -> progress JSON / 404 none
  *   PUT  {base}/syncs/progress           -> {document, progress, percentage, device, device_id}
- * Auth is the kosync header pair x-auth-user / x-auth-key, where the key is
- * the MD5 hex of the password (never the plaintext).
+ *
+ * Standard kosync authentication uses x-auth-user / x-auth-key, where the
+ * key is the MD5 hex of the password. When the plaintext password is
+ * available, HTTP Basic authentication is sent as well for compatibility
+ * with Calibre-Web-Automated's kosync bridge.
  */
 public class KoSyncClient {
 
@@ -171,8 +175,20 @@ public class KoSyncClient {
         conn.setConnectTimeout(TIMEOUT_MS);
         conn.setReadTimeout(TIMEOUT_MS);
         conn.setRequestProperty("Accept", "application/vnd.koreader.v1+json");
+
+        // Standard KOReader-Sync authentication.
         conn.setRequestProperty("x-auth-user", settings.getUsername());
         conn.setRequestProperty("x-auth-key", settings.getPasswordMd5());
+
+        // Calibre-Web-Automated's kosync bridge authenticates with HTTP Basic
+        // and therefore needs the original password rather than its MD5 hash.
+        String plaintextPassword = settings.getPasswordPlain();
+        if (!plaintextPassword.isEmpty()) {
+            String credentials = settings.getUsername() + ":" + plaintextPassword;
+            String encoded = Base64.encodeToString(
+                    credentials.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+            conn.setRequestProperty("Authorization", "Basic " + encoded);
+        }
         return conn;
     }
 

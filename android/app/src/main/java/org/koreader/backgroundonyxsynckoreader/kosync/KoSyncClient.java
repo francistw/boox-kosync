@@ -13,19 +13,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
-/**
- * Minimal KOReader-Sync (kosync) protocol client.
- *
- * Wire format matches CrossPoint's KOReaderSyncClient:
- *   GET  {base}/users/auth               -> 200 ok / 401 bad credentials
- *   GET  {base}/syncs/progress/{docHash} -> progress JSON / 404 none
- *   PUT  {base}/syncs/progress           -> {document, progress, percentage, device, device_id}
- *
- * Standard kosync authentication uses x-auth-user / x-auth-key, where the
- * key is the MD5 hex of the password. When the plaintext password is
- * available, HTTP Basic authentication is sent as well for compatibility
- * with Calibre-Web-Automated's kosync bridge.
- */
+/** Minimal KOReader-Sync (kosync) protocol client. */
 public class KoSyncClient {
 
     private static final String TAG = "KoSyncClient";
@@ -37,22 +25,28 @@ public class KoSyncClient {
 
     public static class Progress {
         public String document;
-        public String progress;      // xpath string (KOReader/CrossPoint) or page number
-        public double percentage;    // 0.0 .. 1.0
+        public String progress;
+        public double percentage;
         public String device;
         public String deviceId;
-        public long timestampSec;    // server-side timestamp, epoch seconds
+        public long timestampSec;
     }
 
     public static class Result {
         public final Error error;
         public final int httpCode;
         public final Progress progress;
+        public final String serverMessage;
 
         Result(Error error, int httpCode, Progress progress) {
+            this(error, httpCode, progress, null);
+        }
+
+        Result(Error error, int httpCode, Progress progress, String serverMessage) {
             this.error = error;
             this.httpCode = httpCode;
             this.progress = progress;
+            this.serverMessage = serverMessage;
         }
     }
 
@@ -73,14 +67,15 @@ public class KoSyncClient {
         try {
             HttpURLConnection conn = open("/users/auth", "GET");
             int code = conn.getResponseCode();
-            drain(conn);
-            Log.d(TAG, "auth -> " + code);
+            String body = readBody(conn);
+            String message = extractServerMessage(body);
+            Log.d(TAG, "auth -> " + code + (message != null ? " (" + message + ")" : ""));
             if (code == 200) return new Result(Error.OK, code, null);
-            if (code == 401) return new Result(Error.AUTH_FAILED, code, null);
-            return new Result(Error.SERVER_ERROR, code, null);
+            if (code == 401) return new Result(Error.AUTH_FAILED, code, null, message);
+            return new Result(Error.SERVER_ERROR, code, null, message);
         } catch (Exception e) {
             Log.w(TAG, "auth failed: " + e);
-            return new Result(Error.NETWORK_ERROR, 0, null);
+            return new Result(Error.NETWORK_ERROR, 0, null, e.getMessage());
         }
     }
 
@@ -103,24 +98,22 @@ public class KoSyncClient {
                     p.device = json.optString("device", "");
                     p.deviceId = json.optString("device_id", "");
                     p.timestampSec = json.optLong("timestamp", 0);
-                    // A 200 with no percentage/timestamp means the server has
-                    // no progress for this document (some servers do this
-                    // instead of returning 404).
                     if (p.timestampSec == 0 && !json.has("percentage")) {
                         return new Result(Error.NOT_FOUND, code, null);
                     }
                     return new Result(Error.OK, code, p);
                 } catch (Exception e) {
                     Log.w(TAG, "getProgress JSON parse failed: " + e);
-                    return new Result(Error.JSON_ERROR, code, null);
+                    return new Result(Error.JSON_ERROR, code, null, summarizeBody(body));
                 }
             }
-            if (code == 401) return new Result(Error.AUTH_FAILED, code, null);
-            if (code == 404) return new Result(Error.NOT_FOUND, code, null);
-            return new Result(Error.SERVER_ERROR, code, null);
+            String message = extractServerMessage(body);
+            if (code == 401) return new Result(Error.AUTH_FAILED, code, null, message);
+            if (code == 404) return new Result(Error.NOT_FOUND, code, null, message);
+            return new Result(Error.SERVER_ERROR, code, null, message);
         } catch (Exception e) {
             Log.w(TAG, "getProgress failed: " + e);
-            return new Result(Error.NETWORK_ERROR, 0, null);
+            return new Result(Error.NETWORK_ERROR, 0, null, e.getMessage());
         }
     }
 
@@ -135,37 +128,44 @@ public class KoSyncClient {
             json.put("percentage", percentage);
             json.put("device", deviceName);
             json.put("device_id", deviceId);
-            byte[] body = json.toString().getBytes(StandardCharsets.UTF_8);
+            byte[] requestBody = json.toString().getBytes(StandardCharsets.UTF_8);
 
             HttpURLConnection conn = open("/syncs/progress", "PUT");
             conn.setDoOutput(true);
             conn.setRequestProperty("Content-Type", "application/json");
             try (OutputStream out = conn.getOutputStream()) {
-                out.write(body);
+                out.write(requestBody);
             }
             int code = conn.getResponseCode();
-            drain(conn);
-            Log.d(TAG, "updateProgress " + documentHash + " " + percentage + " -> " + code);
+            String body = readBody(conn);
+            String message = extractServerMessage(body);
+            Log.d(TAG, "updateProgress " + documentHash + " " + percentage + " -> " + code
+                    + (message != null ? " (" + message + ")" : ""));
             if (code == 200 || code == 202) return new Result(Error.OK, code, null);
-            if (code == 401) return new Result(Error.AUTH_FAILED, code, null);
-            return new Result(Error.SERVER_ERROR, code, null);
+            if (code == 401) return new Result(Error.AUTH_FAILED, code, null, message);
+            return new Result(Error.SERVER_ERROR, code, null, message);
         } catch (Exception e) {
             Log.w(TAG, "updateProgress failed: " + e);
-            return new Result(Error.NETWORK_ERROR, 0, null);
+            return new Result(Error.NETWORK_ERROR, 0, null, e.getMessage());
         }
     }
 
     public static String errorString(Result result) {
+        String base;
         switch (result.error) {
-            case OK: return "Success";
-            case NO_CREDENTIALS: return "No credentials configured";
-            case NETWORK_ERROR: return "Network error";
-            case AUTH_FAILED: return "Authentication failed";
-            case SERVER_ERROR: return "Server error (HTTP " + result.httpCode + ")";
-            case JSON_ERROR: return "Bad server response";
-            case NOT_FOUND: return "No progress found on server";
-            default: return "Unknown error";
+            case OK: base = "Success"; break;
+            case NO_CREDENTIALS: base = "No credentials configured"; break;
+            case NETWORK_ERROR: base = "Network error"; break;
+            case AUTH_FAILED: base = "Authentication failed"; break;
+            case SERVER_ERROR: base = "Server error (HTTP " + result.httpCode + ")"; break;
+            case JSON_ERROR: base = "Bad server response"; break;
+            case NOT_FOUND: base = "No progress found on server"; break;
+            default: base = "Unknown error"; break;
         }
+        if (result.serverMessage != null && !result.serverMessage.isEmpty()) {
+            return base + ": " + result.serverMessage;
+        }
+        return base;
     }
 
     private HttpURLConnection open(String path, String method) throws Exception {
@@ -176,12 +176,9 @@ public class KoSyncClient {
         conn.setReadTimeout(TIMEOUT_MS);
         conn.setRequestProperty("Accept", "application/vnd.koreader.v1+json");
 
-        // Standard KOReader-Sync authentication.
         conn.setRequestProperty("x-auth-user", settings.getUsername());
         conn.setRequestProperty("x-auth-key", settings.getPasswordMd5());
 
-        // Calibre-Web-Automated's kosync bridge authenticates with HTTP Basic
-        // and therefore needs the original password rather than its MD5 hash.
         String plaintextPassword = settings.getPasswordPlain();
         if (!plaintextPassword.isEmpty()) {
             String credentials = settings.getUsername() + ":" + plaintextPassword;
@@ -190,6 +187,25 @@ public class KoSyncClient {
             conn.setRequestProperty("Authorization", "Basic " + encoded);
         }
         return conn;
+    }
+
+    private static String extractServerMessage(String body) {
+        if (body == null || body.trim().isEmpty()) return null;
+        try {
+            JSONObject json = new JSONObject(body);
+            String message = json.optString("message", "");
+            if (!message.isEmpty()) return message;
+            if (json.has("error")) return "error=" + json.optString("error");
+        } catch (Exception ignored) {
+        }
+        return summarizeBody(body);
+    }
+
+    private static String summarizeBody(String body) {
+        if (body == null) return null;
+        String text = body.replaceAll("\\s+", " ").trim();
+        if (text.length() > 180) text = text.substring(0, 180) + "…";
+        return text;
     }
 
     private static String readBody(HttpURLConnection conn) {
@@ -212,9 +228,5 @@ public class KoSyncClient {
         } finally {
             conn.disconnect();
         }
-    }
-
-    private static void drain(HttpURLConnection conn) {
-        readBody(conn);
     }
 }
